@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    body { margin: 0; background-color: #1f2937; color: #e5e7eb; font-family: sans-serif; overflow: hidden; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; min-height: 100vh; }
+    canvas { display: block; border: 2px solid #60a5fa; box-shadow: 0 0 10px rgba(96,165,250,0.3); margin-top: 10px; }
+    .controls { padding: 10px; background-color: #374151; border-radius: 8px; margin-bottom: 15px; display: flex; flex-direction: column; align-items: center; gap: 10px; width: 80%; max-width: 600px; }
+    .control-group { display: flex; align-items: center; gap: 10px; width: 100%; justify-content: center; }
+    label { font-weight: bold; }
+    input[type="range"] { width: 70%; -webkit-appearance: none; appearance: none; background: #60a5fa; outline: none; height: 8px; border-radius: 5px; }
+    input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 20px; height: 20px; border-radius: 50%; background: #a5f38a; cursor: pointer; border: 2px solid #1f2937; }
+    input[type="range"]::-moz-range-thumb { width: 20px; height: 20px; border-radius: 50%; background: #a5f38a; cursor: pointer; border: 2px solid #1f2937; }
+    .info-display { background-color: #4b5563; padding: 10px 15px; border-radius: 5px; width: 80%; max-width: 600px; margin-top: 10px; text-align: center; font-size: 0.9em; }
+    .info-display div { margin-bottom: 5px; }
+    .error-display { position: absolute; top: 10px; left: 10px; right: 10px; padding: 15px; background-color: #fff0f0; border: 1px solid #d00; color: #d00; font-family: monospace; white-space: pre-wrap; z-index: 9999; border-radius: 5px; box-shadow: 0 2px 10px rgba(0,0,0,0.2); max-height: calc(100vh - 40px); overflow-y: auto; }
+  </style>
+  <title>Charles's Law Simulation</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.js"></script>
+</head>
+<body>
+  <div class="controls">
+    <h2>Charles's Law Simulation</h2>
+    <div class="control-group">
+      <label for="temperatureSlider">Temperature:</label>
+      <input type="range" id="temperatureSlider" min="-100" max="300" value="20" step="1">
+    </div>
+    <div class="info-display">
+      <div>Temperature (Celsius/Kelvin): <span id="tempDisplay"></span></div>
+      <div>Volume: <span id="volumeDisplay"></span></div>
+      <div>Charles's Law: <span id="formulaDisplay"></span></div>
+    </div>
+  </div>
+
+  <script>
+    function displayError(e, sketchType) {
+      console.error(sketchType + " Error:", e);
+      const errorDiv = document.createElement('pre');
+      errorDiv.className = 'error-display';
+      errorDiv.textContent = 'Error in ' + sketchType + ' Sketch:\n\n' + e.message + '\n\nStack Trace:\n' + e.stack;
+      document.body.appendChild(errorDiv);
+      const canvas = document.querySelector('canvas');
+      if (canvas) canvas.style.display = 'none';
+    }
+
+    // p5.js Sketch Variables
+    let containerX, containerY, containerWidth, containerMinHeight, containerMaxHeight;
+    let pistonY; // Y coordinate of the piston's bottom edge (top of gas)
+    const particleRadius = 3;
+    const numParticles = 100;
+    let gasParticles = [];
+    const kelvinOffset = 273.15; // 0 Celsius = 273.15 Kelvin
+
+    let temperatureSlider;
+    let tempDisplay, volumeDisplay, formulaDisplay;
+
+    // Initial state for Charles's Law (V1, T1)
+    const baseTempC = 20; // Initial temperature in Celsius, chosen as a common room temperature
+    let baseTempK;
+    let baseVolumeUnits; // This will be calculated based on a chosen initial height
+
+    const maxVolumeUnits = 100; // Arbitrary max volume units for display
+    const minVolumeUnits = 10; // Arbitrary min volume units for display
+
+    function setup() {
+      try {
+        // Setup canvas dynamically to fit within the page and controls
+        const controlsHeight = document.querySelector('.controls').offsetHeight;
+        const canvasContainerOffset = 20; // Margin below controls
+        const availableHeight = windowHeight - controlsHeight - canvasContainerOffset * 2; // Subtract top and bottom margins
+
+        const canvasWidth = Math.min(windowWidth * 0.8, 600);
+        const canvasHeight = Math.min(availableHeight, 400); 
+        
+        createCanvas(canvasWidth, canvasHeight).parent(document.querySelector('body')); // Parent to body directly below controls
+
+        containerWidth = width * 0.4;
+        containerMinHeight = height * 0.2;
+        containerMaxHeight = height * 0.8;
+        containerX = width / 2 - containerWidth / 2;
+        containerY = height - containerMaxHeight - 20; // Position container near bottom of canvas
+
+        // Initialize UI elements
+        temperatureSlider = document.getElementById('temperatureSlider');
+        tempDisplay = document.getElementById('tempDisplay');
+        volumeDisplay = document.getElementById('volumeDisplay');
+        formulaDisplay = document.getElementById('formulaDisplay');
+
+        temperatureSlider.value = baseTempC; // Set slider to initial base temperature
+
+        baseTempK = baseTempC + kelvinOffset;
+        
+        // Define an initial gas height that is roughly in the middle range
+        let initialGasHeight = map(baseTempC, -100, 300, containerMinHeight, containerMaxHeight);
+        initialGasHeight = constrain(initialGasHeight, containerMinHeight, containerMaxHeight); // Ensure it's within bounds
+
+        pistonY = containerY + containerMaxHeight - initialGasHeight; // Calculate initial piston Y
+        baseVolumeUnits = map(initialGasHeight, containerMinHeight, containerMaxHeight, minVolumeUnits, maxVolumeUnits); // Calculate base volume units
+
+        // Initialize gas particles
+        for (let i = 0; i < numParticles; i++) {
+          gasParticles.push({
+            x: random(containerX + particleRadius, containerX + containerWidth - particleRadius),
+            y: random(pistonY + particleRadius, containerY + containerMaxHeight - particleRadius),
+            vx: random([-1, 1]) * random(0.5, 1.5), // Initial random velocity
+            vy: random([-1, 1]) * random(0.5, 1.5)
+          });
+        }
+
+        updateSimulation(); // Call once to set initial state and displays
+      } catch (e) {
+        displayError(e, 'p5.js');
+        noLoop();
+      }
+    }
+
+    function draw() {
+      try {
+        background(31, 41, 55); // Dark background
+        updateSimulation();
+        drawContainer();
+        drawGasParticles();
+        drawHeatSource();
+        displayInfo();
+      } catch (e) {
+        displayError(e, 'p5.js');
+        noLoop();
+      }
+    }
+
+    function updateSimulation() {
+      // Get current temperature from slider
+      let currentTempC = parseFloat(temperatureSlider.value);
+      let currentTempK = currentTempC + kelvinOffset;
+
+      // Calculate new volume based on Charles's Law: V2 = V1 * (T2 / T1)
+      // V2 = baseVolumeUnits * (currentTempK / baseTempK)
+      let currentVolumeUnits = baseVolumeUnits * (currentTempK / baseTempK);
+
+      // Constrain volume units to prevent piston from going too far
+      currentVolumeUnits = constrain(currentVolumeUnits, minVolumeUnits, maxVolumeUnits);
+
+      // Map volume units back to gas height
+      // Higher volume units -> greater gas height (containerMaxHeight)
+      // Lower volume units -> smaller gas height (containerMinHeight)
+      let gasHeight = map(currentVolumeUnits, minVolumeUnits, maxVolumeUnits, containerMinHeight, containerMaxHeight);
+      
+      // Calculate piston Y based on gas height
+      // pistonY = containerY + total container height - gas height
+      pistonY = containerY + containerMaxHeight - gasHeight;
+
+      // Update particle speeds based on temperature (speed ~ sqrt(T))
+      let particleSpeedFactor = sqrt(currentTempK / baseTempK);
+
+      for (let i = 0; i < numParticles; i++) {
+        let p = gasParticles[i];
+
+        // Move particles
+        p.x += p.vx * particleSpeedFactor;
+        p.y += p.vy * particleSpeedFactor;
+
+        // Wall collisions (sides, bottom, piston)
+        // Left wall
+        if (p.x < containerX + particleRadius) {
+          p.x = containerX + particleRadius;
+          p.vx *= -1;
+        }
+        // Right wall
+        if (p.x > containerX + containerWidth - particleRadius) {
+          p.x = containerX + containerWidth - particleRadius;
+          p.vx *= -1;
+        }
+        // Bottom wall
+        if (p.y > containerY + containerMaxHeight - particleRadius) {
+          p.y = containerY + containerMaxHeight - particleRadius;
+          p.vy *= -1;
+        }
+        // Piston (top wall)
+        if (p.y < pistonY + particleRadius) {
+          p.y = pistonY + particleRadius;
+          p.vy *= -1;
+        }
+      }
+    }
+
+    function drawContainer() {
+      // Main container body
+      noFill();
+      stroke(96, 165, 250); // Blue border
+      strokeWeight(4);
+
+      // Draw container walls (sides and bottom)
+      line(containerX, containerY, containerX, containerY + containerMaxHeight); // Left wall
+      line(containerX + containerWidth, containerY, containerX + containerWidth, containerY + containerMaxHeight); // Right wall
+      line(containerX, containerY + containerMaxHeight, containerX + containerWidth, containerY + containerMaxHeight); // Bottom wall
+
+      // Piston
+      let pistonThickness = 10;
+      fill(156, 163, 175); // Gray piston
+      stroke(75, 85, 99);
+      rect(containerX - 2, pistonY - pistonThickness, containerWidth + 4, pistonThickness); // Piston slightly wider than container
+
+      // Volume markings
+      fill(229, 231, 235); // White text
+      noStroke();
+      textSize(12);
+      textAlign(LEFT, CENTER);
+      let volumeMarkerGap = 40; // pixels for marking lines
+
+      // Draw numerical volume markings on the side
+      for (let h = containerMinHeight; h <= containerMaxHeight; h += volumeMarkerGap) {
+        let markerY = containerY + containerMaxHeight - h; // Y coordinate for the line
+        
+        // Ensure marker is within container height and not behind piston
+        if (markerY > containerY + pistonThickness) {
+          let markerVolume = map(h, containerMinHeight, containerMaxHeight, minVolumeUnits, maxVolumeUnits);
+          
+          // Draw a small line marker
+          stroke(229, 231, 235, 150);
+          line(containerX + containerWidth, markerY, containerX + containerWidth + 5, markerY);
+          noStroke();
+
+          // Draw text label
+          text(floor(markerVolume) + ' Liters', containerX + containerWidth + 10, markerY);
+        }
+      }
+
+      // Indicate current volume with a line and text
+      stroke(255, 255, 0); // Yellow line for current volume
+      strokeWeight(2);
+      line(containerX + containerWidth + 5, pistonY + pistonThickness/2, containerX + containerWidth + 80, pistonY + pistonThickness/2);
+      noStroke();
+      fill(255, 255, 0);
+      text('Current', containerX + containerWidth + 10, pistonY + pistonThickness/2 - 15);
+      text('Volume', containerX + containerWidth + 10, pistonY + pistonThickness/2 + 5);
+
+    }
+
+    function drawGasParticles() {
+      fill(255, 255, 0, 150); // Yellow, translucent particles
+      noStroke();
+      for (let p of gasParticles) {
+        // Ensure particles are drawn only within the gas region
+        if (p.x > containerX + particleRadius && p.x < containerX + containerWidth - particleRadius &&
+            p.y > pistonY + particleRadius && p.y < containerY + containerMaxHeight - particleRadius) {
+          ellipse(p.x, p.y, particleRadius * 2);
+        }
+      }
+    }
+
+    function drawHeatSource() {
+      let currentTempC = parseFloat(temperatureSlider.value);
+      // Map temperature to flame intensity/height: 0 at minTemp, max at maxTemp
+      let normalizedTemp = map(currentTempC, -100, 300, 0, 1);
+      normalizedTemp = constrain(normalizedTemp, 0, 1);
+
+      let flameEffectStrength = normalizedTemp; // Ranges from 0 to 1 for visuals
+
+      if (flameEffectStrength > 0.05) { // Only draw if there's significant heat
+        // Draw fire/heat source as a wavy line or collection of ellipses
+        noStroke();
+        for (let i = 0; i < 7; i++) { // Multiple flame elements
+          let baseFlameX = containerX + containerWidth * (i / 6.0);
+          let baseFlameY = containerY + containerMaxHeight + 10;
+          
+          // Calculate flame height based on normalized temperature and randomness
+          let currentFlameHeight = map(noise(frameCount * 0.05 + i), 0, 1, 10, 40) * flameEffectStrength;
+          let currentFlameWidth = map(noise(frameCount * 0.05 + i + 100), 0, 1, 10, 20) * flameEffectStrength;
+
+          // Orange-red flames, more opaque with higher temperature
+          fill(255, map(flameEffectStrength, 0, 1, 100, 165), 0, map(flameEffectStrength, 0, 1, 50, 200));
+          ellipse(baseFlameX + random(-5, 5), baseFlameY + random(-5, 5), currentFlameWidth, currentFlameHeight);
+        }
+      } else if (flameEffectStrength < 0.2) { // Show "cold" effect if very low temp (e.g. below 0C)
+        // Draw cold effect (e.g., icy blue haze inside container)
+        fill(173, 216, 230, map(flameEffectStrength, 0, 0.2, 100, 0)); // Light blue, fading out
+        let currentGasHeight = (containerY + containerMaxHeight) - pistonY;
+        rect(containerX + 2, pistonY + 2, containerWidth - 4, currentGasHeight - 4); // Draw inside container walls
+      }
+    }
+
+    function displayInfo() {
+      let currentTempC = parseFloat(temperatureSlider.value);
+      let currentTempK = currentTempC + kelvinOffset;
+      let currentGasHeight = (containerY + containerMaxHeight) - pistonY;
+      let currentVolumeUnits = map(currentGasHeight, containerMinHeight, containerMaxHeight, minVolumeUnits, maxVolumeUnits);
+
+      tempDisplay.textContent = `${currentTempC.toFixed(1)}°C / ${currentTempK.toFixed(1)} K`;
+      volumeDisplay.textContent = `${currentVolumeUnits.toFixed(1)} Liters`;
+
+      // Display Charles's Law formula V1/T1 = V2/T2
+      let k_base = baseVolumeUnits / baseTempK;
+      let k_current = currentVolumeUnits / currentTempK;
+
+      formulaDisplay.innerHTML = `V / T = k (constant)<br>
+                             Initial: ${baseVolumeUnits.toFixed(1)} Liters / ${baseTempK.toFixed(1)} K = ${k_base.toFixed(3)}<br>
+                             Current: ${currentVolumeUnits.toFixed(1)} Liters / ${currentTempK.toFixed(1)} K = ${k_current.toFixed(3)}`;
+    }
+
+    function windowResized() {
+      // Re-adjust canvas size and container position
+      const controlsHeight = document.querySelector('.controls').offsetHeight;
+      const canvasContainerOffset = 20;
+      const availableHeight = windowHeight - controlsHeight - canvasContainerOffset * 2;
+
+      const canvasWidth = Math.min(windowWidth * 0.8, 600);
+      const canvasHeight = Math.min(availableHeight, 400);
+      
+      resizeCanvas(canvasWidth, canvasHeight);
+
+      containerWidth = width * 0.4;
+      containerMinHeight = height * 0.2;
+      containerMaxHeight = height * 0.8;
+      containerX = width / 2 - containerWidth / 2;
+      containerY = height - containerMaxHeight - 20;
+
+      // Recalculate pistonY and baseVolumeUnits based on the new canvas size
+      // This helps to keep the simulation consistent across resizes.
+      let initialGasHeight = map(baseTempC, -100, 300, containerMinHeight, containerMaxHeight);
+      initialGasHeight = constrain(initialGasHeight, containerMinHeight, containerMaxHeight);
+      pistonY = containerY + containerMaxHeight - initialGasHeight;
+      baseVolumeUnits = map(initialGasHeight, containerMinHeight, containerMaxHeight, minVolumeUnits, maxVolumeUnits);
+
+
+      // Reset particle positions to prevent them from being out of bounds
+      // They should be randomly placed within the current gas volume.
+      for (let i = 0; i < numParticles; i++) {
+        gasParticles[i].x = random(containerX + particleRadius, containerX + containerWidth - particleRadius);
+        gasParticles[i].y = random(pistonY + particleRadius, containerY + containerMaxHeight - particleRadius);
+        // Reset velocities to prevent extreme values after resize
+        gasParticles[i].vx = random([-1, 1]) * random(0.5, 1.5);
+        gasParticles[i].vy = random([-1, 1]) * random(0.5, 1.5);
+      }
+    }
+  </script>
+</body>
+</html>
